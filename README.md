@@ -123,13 +123,16 @@ Train a Domain-IL baseline on the three domains:
 
 ```bash
 uv run python main.py \
-  --model er \
+  --model derpp \
   --dataset domain-pneumonia \
   --medical_domain_root ./dataset \
   --lr 1e-4 \
   --buffer_size 500 \
+  --minibatch_size 32 \
   --batch_size 32 \
   --n_epochs 10 \
+  --alpha 0.5 \
+  --beta 0.5 \
   --num_workers 4 \
   --savecheck task
 ```
@@ -138,12 +141,16 @@ Run a quick smoke/debug training pass:
 
 ```bash
 uv run python main.py \
-  --model sgd \
+  --model derpp \
   --dataset domain-pneumonia \
   --medical_domain_root ./dataset \
   --lr 1e-4 \
+  --buffer_size 50 \
+  --minibatch_size 4 \
   --batch_size 4 \
   --n_epochs 1 \
+  --alpha 0.5 \
+  --beta 0.5 \
   --num_workers 0 \
   --debug_mode 1 \
   --non_verbose 1
@@ -153,11 +160,14 @@ Evaluate a saved checkpoint in inference-only mode:
 
 ```bash
 uv run python main.py \
-  --model er \
+  --model derpp \
   --dataset domain-pneumonia \
   --medical_domain_root ./dataset \
   --lr 1e-4 \
   --buffer_size 500 \
+  --minibatch_size 32 \
+  --alpha 0.5 \
+  --beta 0.5 \
   --loadcheck ./checkpoints/<checkpoint>.pt \
   --inference_only 1 \
   --num_workers 4
