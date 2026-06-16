@@ -119,6 +119,8 @@ The dataset loader auto-detects `./dataset/` and also accepts an explicit root t
 uv run pip install pydicom
 ```
 
+The default `vit` backbone can load the timm ViT checkpoint locally instead of downloading it from Hugging Face. Put `model.safetensors` at `./checkpoints/timm/vit_base_patch16_224.augreg2_in21k_ft_in1k/model.safetensors`, set `MAMMOTH_VIT_PRETRAINED_PATH`, or pass `--pretrained_path /path/to/model.safetensors` in the commands below.
+
 Train a Domain-IL baseline on the three domains:
 
 ```bash
@@ -126,6 +128,7 @@ uv run python main.py \
   --model derpp \
   --dataset domain-pneumonia \
   --medical_domain_root ./dataset \
+  --pretrained_path ./checkpoints/timm/vit_base_patch16_224.augreg2_in21k_ft_in1k/model.safetensors \
   --lr 1e-4 \
   --buffer_size 500 \
   --minibatch_size 32 \
@@ -144,6 +147,7 @@ uv run python main.py \
   --model derpp \
   --dataset domain-pneumonia \
   --medical_domain_root ./dataset \
+  --pretrained_path ./checkpoints/timm/vit_base_patch16_224.augreg2_in21k_ft_in1k/model.safetensors \
   --lr 1e-4 \
   --buffer_size 50 \
   --minibatch_size 4 \
@@ -163,6 +167,7 @@ uv run python main.py \
   --model derpp \
   --dataset domain-pneumonia \
   --medical_domain_root ./dataset \
+  --pretrained_path ./checkpoints/timm/vit_base_patch16_224.augreg2_in21k_ft_in1k/model.safetensors \
   --lr 1e-4 \
   --buffer_size 500 \
   --minibatch_size 32 \
@@ -181,6 +186,7 @@ uv run python main.py \
   --dataset domain-pneumonia \
   --medical_domain_root ./dataset \
   --medical_domain_val_ratio 0.1 \
+  --pretrained_path ./checkpoints/timm/vit_base_patch16_224.augreg2_in21k_ft_in1k/model.safetensors \
   --lr 1e-4 \
   --buffer_size 500 \
   --alpha 0.5 \
