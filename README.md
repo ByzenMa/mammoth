@@ -43,6 +43,7 @@ python main.py --model tak --load_fisher 1 --fisher_cache hf://<user-or-org>/<re
 - [Setup](#setup)
 - [Examples](#examples)
   - [Run a model](#run-a-model)
+  - [Domain-incremental pneumonia example](#domain-incremental-pneumonia-example)
   - [Build a new model](#build-a-new-model)
   - [Build a new dataset](#build-a-new-dataset)
 - [New Features](#new-features)
@@ -86,6 +87,111 @@ python main.py --model derpp --dataset seq-cifar100 --model_config best
 ```
 
  > NOTE: the `--model_config` argument will look for a file `<model_name>.yaml` in the `models/config/` folder. This file should contain the hyperparameters for the best configuration of the model. You can find more information in [the documentation](https://aimagelab.github.io/mammoth/models/model_arguments.html#model-configurations-and-best-arguments).
+
+### Domain-incremental pneumonia example
+
+The `domain-pneumonia` dataset is a binary Domain-IL benchmark built from three chest X-ray domains:
+
+1. `chest_xray` (`NORMAL` vs `PNEUMONIA` folders),
+2. `CheXpert-v1.0-small` (normal samples plus pneumonia-related findings from `Consolidation`, `Lung Opacity`, and `Pneumonia`; uncertain labels and other diseases are discarded),
+3. `rsna-pneumonia-detection-challenge` (`Normal` vs `Lung Opacity`; `No Lung Opacity / Not Normal` is discarded).
+
+Expected local layout:
+
+```text
+dataset/
+├── chest_xray/
+│   └── train/
+│       ├── NORMAL/
+│       └── PNEUMONIA/
+├── CheXpert-v1.0-small/
+│   ├── train.csv
+│   ├── valid.csv              # optional; if missing/unusable, Mammoth creates a seeded split
+│   └── train/
+└── rsna-pneumonia-detection-challenge/
+    ├── stage_2_detailed_class_info.csv
+    └── stage_2_train_images/
+```
+
+The dataset loader auto-detects `./dataset/` and also accepts an explicit root through `--medical_domain_root`. RSNA images are DICOM files, so install `pydicom` if you use the RSNA domain:
+
+```bash
+uv run pip install pydicom
+```
+
+The default `vit` backbone can load the timm ViT checkpoint locally instead of downloading it from Hugging Face. Put `model.safetensors` at `./checkpoints/timm/vit_base_patch16_224.augreg2_in21k_ft_in1k/model.safetensors`, set `MAMMOTH_VIT_PRETRAINED_PATH`, or pass `--pretrained_path /path/to/model.safetensors` in the commands below.
+
+Train a Domain-IL baseline on the three domains:
+
+```bash
+uv run python main.py \
+  --model derpp \
+  --dataset domain-pneumonia \
+  --medical_domain_root ./dataset \
+  --pretrained_path ./checkpoints/timm/vit_base_patch16_224.augreg2_in21k_ft_in1k/model.safetensors \
+  --lr 1e-4 \
+  --buffer_size 500 \
+  --minibatch_size 32 \
+  --batch_size 32 \
+  --n_epochs 10 \
+  --alpha 0.5 \
+  --beta 0.5 \
+  --num_workers 4 \
+  --savecheck task
+```
+
+Run a quick smoke/debug training pass:
+
+```bash
+uv run python main.py \
+  --model derpp \
+  --dataset domain-pneumonia \
+  --medical_domain_root ./dataset \
+  --pretrained_path ./checkpoints/timm/vit_base_patch16_224.augreg2_in21k_ft_in1k/model.safetensors \
+  --lr 1e-4 \
+  --buffer_size 50 \
+  --minibatch_size 4 \
+  --batch_size 4 \
+  --n_epochs 1 \
+  --alpha 0.5 \
+  --beta 0.5 \
+  --num_workers 0 \
+  --debug_mode 1 \
+  --non_verbose 1
+```
+
+Evaluate a saved checkpoint in inference-only mode:
+
+```bash
+uv run python main.py \
+  --model derpp \
+  --dataset domain-pneumonia \
+  --medical_domain_root ./dataset \
+  --pretrained_path ./checkpoints/timm/vit_base_patch16_224.augreg2_in21k_ft_in1k/model.safetensors \
+  --lr 1e-4 \
+  --buffer_size 500 \
+  --minibatch_size 32 \
+  --alpha 0.5 \
+  --beta 0.5 \
+  --loadcheck ./checkpoints/<checkpoint>.pt \
+  --inference_only 1 \
+  --num_workers 4
+```
+
+Use `--medical_domain_val_ratio` to change the seeded validation/test split used when a domain does not provide an explicit validation split:
+
+```bash
+uv run python main.py \
+  --model derpp \
+  --dataset domain-pneumonia \
+  --medical_domain_root ./dataset \
+  --medical_domain_val_ratio 0.1 \
+  --pretrained_path ./checkpoints/timm/vit_base_patch16_224.augreg2_in21k_ft_in1k/model.safetensors \
+  --lr 1e-4 \
+  --buffer_size 500 \
+  --alpha 0.5 \
+  --beta 0.5
+```
 
 ### Build a new model
 
@@ -215,6 +321,7 @@ Mammoth currently includes **23** datasets, covering *toy classification problem
 - Sequential EuroSAT-RGB (_Class-Il / Task-IL_): `seq-eurosat-rgb`.
 - Sequential ISIC (_Class-Il / Task-IL_): `seq-isic`.
 - Sequential ChestX (_Class-Il / Task-IL_): `seq-chestx`.
+- Domain Pneumonia (_Domain-IL_): `domain-pneumonia`.
 - Sequential MIT-67 (_Class-Il / Task-IL_): `seq-mit67`.
 - Sequential CropDisease (_Class-Il / Task-IL_): `seq-cropdisease`.
 - Sequential CelebA (_Biased-Class-Il_): `seq-celeba`. *This dataset is multi-label (i.e., trains with binary cross-entropy)*
