@@ -49,6 +49,7 @@ Hacked together by / Copyright 2020, Ross Wightman
 
 import logging
 import math
+import os
 from functools import partial
 
 import torch
@@ -667,7 +668,45 @@ def create_vision_transformer(variant, base_class=VisionTransformer, pretrained=
         )
 
 
-def vit_base_patch16_224_prompt_prototype(pretrained=False, pretrain_type='in21k-ft-in1k', **kwargs):
+def _load_local_vit_weights(model: nn.Module, checkpoint_path: str) -> None:
+    if checkpoint_path.endswith('.safetensors'):
+        from safetensors.torch import load_file
+        state_dict = load_file(checkpoint_path)
+    else:
+        checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        state_dict = checkpoint.get('state_dict', checkpoint.get('model', checkpoint)) if isinstance(checkpoint, dict) else checkpoint
+
+    model_state = model.state_dict()
+    compatible_state = {
+        key: value
+        for key, value in state_dict.items()
+        if key in model_state and model_state[key].shape == value.shape
+    }
+    skipped_keys = sorted(set(state_dict) - set(compatible_state))
+    missing_keys, unexpected_keys = model.load_state_dict(compatible_state, strict=False)
+    logging.info('Loaded local ViT weights from `%s` (%d tensors).', checkpoint_path, len(compatible_state))
+    if skipped_keys:
+        logging.warning('Skipped %d incompatible local ViT tensors, e.g. %s.', len(skipped_keys), skipped_keys[:5])
+    if unexpected_keys:
+        logging.warning('Unexpected local ViT tensors while loading `%s`: %s.', checkpoint_path, unexpected_keys)
+    relevant_missing = [key for key in missing_keys if not key.startswith('head.')]
+    if relevant_missing:
+        logging.warning('Missing %d ViT tensors while loading `%s`, e.g. %s.', len(relevant_missing), checkpoint_path, relevant_missing[:5])
+
+
+def _resolve_local_vit_checkpoint(pretrained_path: str = None) -> str:
+    candidates = [pretrained_path, os.environ.get('MAMMOTH_VIT_PRETRAINED_PATH')]
+    candidates.extend([
+        os.path.join('checkpoints', 'timm', 'vit_base_patch16_224.augreg2_in21k_ft_in1k', 'model.safetensors'),
+        os.path.join('checkpoints', 'vit_base_patch16_224.augreg2_in21k_ft_in1k', 'model.safetensors'),
+    ])
+    for candidate in candidates:
+        if candidate and os.path.isfile(os.path.expanduser(candidate)):
+            return os.path.expanduser(candidate)
+    return os.path.expanduser(pretrained_path) if pretrained_path else None
+
+
+def vit_base_patch16_224_prompt_prototype(pretrained=False, pretrain_type='in21k-ft-in1k', pretrained_path=None, **kwargs):
     """ ViT-Base (ViT-B/16) from original paper (https://arxiv.org/abs/2010.11929).
 
     By default, returns a model pre-trained on ImageNet-21k.
@@ -679,10 +718,17 @@ def vit_base_patch16_224_prompt_prototype(pretrained=False, pretrain_type='in21k
     Args:
         pretrained (bool): Load pre-trained weights.
         pretrain_type (str): Type of pre-training. Default is 'in21k'. Other options are 'in21k_old' and 'in1k'.
+        pretrained_path (str): Optional local checkpoint path. When set, weights are loaded from disk
+            instead of triggering timm/Hugging Face downloads.
         **kwargs: Additional arguments to pass to the model.
     """
     assert pretrain_type in ['in21k', 'in21k_old', 'in21k-ft-in1k'], f"Invalid pretrain_type: {pretrain_type}"
-    if not pretrained:
+    pretrained_path = _resolve_local_vit_checkpoint(pretrained_path)
+    if pretrained_path:
+        if not os.path.isfile(pretrained_path):
+            raise FileNotFoundError(f'Local ViT checkpoint not found: {pretrained_path}')
+        pretrained = False
+    if not pretrained and not pretrained_path:
         logging.warning("creating a ViT without pre-trained weights. This is not recommended.")
 
     model_kwargs = dict(patch_size=16, embed_dim=768, depth=12, num_heads=12)
@@ -695,9 +741,11 @@ def vit_base_patch16_224_prompt_prototype(pretrained=False, pretrain_type='in21k
         model = create_vision_transformer('vit_base_patch16_224.augreg_in21k', pretrained=pretrained, **dict(model_kwargs, **kwargs))
     else:
         model = create_vision_transformer('vit_base_patch16_224', pretrained=pretrained, **dict(model_kwargs, **kwargs))
+    if pretrained_path:
+        _load_local_vit_weights(model, pretrained_path)
     return model
 
 
 @register_backbone("vit")
-def vit_backbone(num_classes: int, pretrained=True, pretrain_type='in21k-ft-in1k'):
-    return vit_base_patch16_224_prompt_prototype(pretrained=pretrained, pretrain_type=pretrain_type, num_classes=num_classes)
+def vit_backbone(num_classes: int, pretrained=True, pretrain_type='in21k-ft-in1k', pretrained_path: str = None):
+    return vit_base_patch16_224_prompt_prototype(pretrained=pretrained, pretrain_type=pretrain_type, pretrained_path=pretrained_path, num_classes=num_classes)
