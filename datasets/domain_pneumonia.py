@@ -24,16 +24,23 @@ from utils.conf import base_path
 from utils.prompt_templates import templates
 
 
+CHEST_XRAY_SIZE = (224, 224)
+
+
 class BinaryChestDomainDataset(Dataset):
     """Simple image dataset returning Mammoth's train tuple."""
 
-    def __init__(self, samples: Sequence[Tuple[str, int]], transform: Optional[Callable] = None, train: bool = True) -> None:
+    def __init__(self, samples: Sequence[Tuple[str, int]], transform: Optional[Callable] = None, train: bool = True, size: Tuple[int, int] = CHEST_XRAY_SIZE) -> None:
         self.samples = list(samples)
         self.data = np.array([path for path, _ in self.samples])
         self.targets = np.array([target for _, target in self.samples], dtype=np.int64)
         self.transform = transform
         self.train = train
-        self.not_aug_transform = transforms.ToTensor()
+        self.not_aug_transform = transforms.Compose([
+            transforms.Resize(size=size, interpolation=InterpolationMode.BICUBIC),
+            transforms.CenterCrop(size),
+            transforms.ToTensor(),
+        ])
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -81,7 +88,7 @@ class DomainPneumonia(ContinualDataset):
     N_CLASSES_PER_TASK = 2
     N_CLASSES = 2
     N_TASKS = 3
-    SIZE = (224, 224)
+    SIZE = CHEST_XRAY_SIZE
     MEAN, STD = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
     LABELS = ['normal', 'pneumonia']
     DOMAIN_NAMES = ['chest_xray', 'chexpert_small', 'rsna_pneumonia']
