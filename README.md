@@ -119,7 +119,7 @@ The dataset loader auto-detects `./dataset/` and also accepts an explicit root t
 uv run pip install pydicom
 ```
 
-The default `vit` backbone can load the timm ViT checkpoint locally instead of downloading it from Hugging Face. Put `model.safetensors` at `./checkpoints/timm/vit_base_patch16_224.augreg2_in21k_ft_in1k/model.safetensors`, set `MAMMOTH_VIT_PRETRAINED_PATH`, or pass `--pretrained_path /path/to/model.safetensors` in the commands below.
+The default `vit` backbone can load the timm ViT checkpoint locally instead of downloading it from Hugging Face. Put `model.safetensors` at `./checkpoints/timm/vit_base_patch16_224.augreg2_in21k_ft_in1k/model.safetensors`, set `MAMMOTH_VIT_PRETRAINED_PATH`, or pass `--pretrained_path /path/to/model.safetensors` in the commands below. The optional `clip` backbone also requires a local checkpoint; put it at `./checkpoints/clip/ViT-B-16.pt`, set `MAMMOTH_CLIP_PRETRAINED_PATH`, or pass `--clip_checkpoint_path /path/to/ViT-B-16.pt`.
 
 Train a Domain-IL baseline on the three domains:
 
@@ -140,16 +140,18 @@ uv run python main.py \
   --savecheck task
 ```
 
-To fuse multiple backbones with a DER++ replay objective, use `derpp-linear-attention` and list the backbones to combine:
+To fuse the default ViT backbone with a local CLIP visual backbone under a DER++ replay objective, use `derpp-linear-attention`:
 
 ```bash
 uv run python main.py \
   --model derpp-linear-attention \
   --dataset domain-pneumonia \
   --backbone vit \
-  --attention_backbones vit,resnet18 \
+  --attention_backbones vit,clip \
   --medical_domain_root ./dataset \
   --pretrained_path ./checkpoints/timm/vit_base_patch16_224.augreg2_in21k_ft_in1k/model.safetensors \
+  --clip_checkpoint_path ./checkpoints/clip/ViT-B-16.pt \
+  --clip_model_name ViT-B-16 \
   --lr 1e-4 \
   --buffer_size 500 \
   --minibatch_size 32 \

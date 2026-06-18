@@ -77,6 +77,12 @@ class DerppLinearAttention(ContinualModel):
                             help='Penalty weight for DER++ label replay.')
         parser.add_argument('--attention_backbones', type=str, default=None,
                             help='Comma-separated backbone names to fuse with linear attention. Defaults to the selected --backbone.')
+        parser.add_argument('--clip_model_name', type=str, default='ViT-B-16',
+                            help='CLIP architecture name used when `clip` is listed in --attention_backbones.')
+        parser.add_argument('--clip_checkpoint_path', type=str, default=None,
+                            help='Local CLIP checkpoint path used when `clip` is listed in --attention_backbones.')
+        parser.add_argument('--freeze_clip', type=int, default=0,
+                            help='Freeze the CLIP visual encoder when `clip` is listed in --attention_backbones.')
         return parser
 
     def __init__(self, backbone, loss, args, transform, dataset=None):
