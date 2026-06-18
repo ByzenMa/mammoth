@@ -140,6 +140,26 @@ uv run python main.py \
   --savecheck task
 ```
 
+To fuse multiple backbones with a DER++ replay objective, use `derpp-linear-attention` and list the backbones to combine:
+
+```bash
+uv run python main.py \
+  --model derpp-linear-attention \
+  --dataset domain-pneumonia \
+  --backbone vit \
+  --attention_backbones vit,resnet18 \
+  --medical_domain_root ./dataset \
+  --pretrained_path ./checkpoints/timm/vit_base_patch16_224.augreg2_in21k_ft_in1k/model.safetensors \
+  --lr 1e-4 \
+  --buffer_size 500 \
+  --minibatch_size 32 \
+  --batch_size 32 \
+  --n_epochs 10 \
+  --alpha 0.5 \
+  --beta 0.5 \
+  --num_workers 4
+```
+
 Run a quick smoke/debug training pass:
 
 ```bash
@@ -251,7 +271,7 @@ Mammoth currently supports **more than 70** models, with new releases covering t
 - Continual Generative training for Incremental prompt-Learning (CGIL): `cgil`
 - Contrastive Language-Image Pre-Training (CLIP): `clip` (*static* method with no learning).
 - CSCCT (on DER++, X-DER with RPC, iCaRL, and ER-ACE): `derpp_cscct`, `xder_rpc_cscct`, `icarl_cscct`, `er_ace_cscct`.
-- Dark Experience for General Continual Learning: a Strong, Simple Baseline (DER & DER++): `der` and `derpp`.
+- Dark Experience for General Continual Learning: a Strong, Simple Baseline (DER & DER++): `der`, `derpp`, and `derpp-linear-attention`.
 - DualPrompt: Complementary Prompting for Rehearsal-free Continual Learning (DualPrompt) - _Requires_ `pip install timm==0.9.8`: `dualprompt`.
 - Efficient Lifelong Learning with A-GEM (A-GEM, A-GEM-R - A-GEM with reservoir buffer): `agem`, `agem_r`.
 - Experience Replay (ER): `er`.
