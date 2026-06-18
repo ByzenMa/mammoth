@@ -182,8 +182,8 @@ class DomainPneumonia(ContinualDataset):
 
     def _load_chexpert(self):
         root = os.path.join(self.medical_domain_root, 'CheXpert-v1.0-small')
-        train, test = [], []
-        for csv_name, bucket in [('train.csv', train), ('valid.csv', test)]:
+        samples = []
+        for csv_name in ['train.csv', 'valid.csv']:
             csv_path = os.path.join(root, csv_name)
             if not os.path.isfile(csv_path):
                 continue
@@ -197,12 +197,8 @@ class DomainPneumonia(ContinualDataset):
                         rel_path = rel_path[len('CheXpert-v1.0-small/'):]
                     path = os.path.join(root, rel_path)
                     if os.path.isfile(path):
-                        bucket.append((path, label))
-        if not test:
-            train, test = self._split_samples(train, 'chexpert_small')
-        if not train:
-            raise RuntimeError(f'No usable samples found for domain `chexpert_small` under `{root}`.')
-        return train, test
+                        samples.append((path, label))
+        return self._split_samples(samples, 'chexpert_small')
 
     def _load_rsna(self):
         root = os.path.join(self.medical_domain_root, 'rsna-pneumonia-detection-challenge')

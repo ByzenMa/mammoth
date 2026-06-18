@@ -106,14 +106,14 @@ dataset/
 │       └── PNEUMONIA/
 ├── CheXpert-v1.0-small/
 │   ├── train.csv
-│   ├── valid.csv              # optional; if missing/unusable, Mammoth creates a seeded split
+│   ├── valid.csv              # optional; merged with train.csv before Mammoth creates a seeded split
 │   └── train/
 └── rsna-pneumonia-detection-challenge/
     ├── stage_2_detailed_class_info.csv
     └── stage_2_train_images/
 ```
 
-The dataset loader auto-detects `./dataset/` and also accepts an explicit root through `--medical_domain_root`. RSNA images are DICOM files, so install `pydicom` if you use the RSNA domain:
+The dataset loader auto-detects `./dataset/` and also accepts an explicit root through `--medical_domain_root`. After filtering labels, each domain is split into train/test with the seeded ratio controlled by `--medical_domain_val_ratio` (default `0.2`, i.e., 8:2). RSNA images are DICOM files, so install `pydicom` if you use the RSNA domain:
 
 ```bash
 uv run pip install pydicom
@@ -198,7 +198,7 @@ uv run python main.py \
   --num_workers 4
 ```
 
-Use `--medical_domain_val_ratio` to change the seeded validation/test split used when a domain does not provide an explicit validation split:
+Use `--medical_domain_val_ratio` to change the seeded validation/test split applied after each domain is filtered:
 
 ```bash
 uv run python main.py \
