@@ -148,6 +148,31 @@ uv run python main.py \
   --dataset domain-pneumonia \
   --backbone vit \
   --attention_backbones vit,clip \
+  --fusion_mode linear_attention \
+  --medical_domain_root ./dataset \
+  --pretrained_path ./checkpoints/timm/vit_base_patch16_224.augreg2_in21k_ft_in1k/model.safetensors \
+  --clip_checkpoint_path ./checkpoints/clip/ViT-B-16.pt \
+  --clip_model_name ViT-B-16 \
+  --lr 1e-4 \
+  --buffer_size 500 \
+  --minibatch_size 32 \
+  --batch_size 32 \
+  --n_epochs 10 \
+  --alpha 0.5 \
+  --beta 0.5 \
+  --num_workers 4
+```
+
+To bypass learned attention and manually weight each backbone, switch the fusion mode and provide one comma-separated weight per backbone:
+
+```bash
+uv run python main.py \
+  --model derpp-linear-attention \
+  --dataset domain-pneumonia \
+  --backbone vit \
+  --attention_backbones vit,clip \
+  --fusion_mode manual \
+  --fusion_weights 0.7,0.3 \
   --medical_domain_root ./dataset \
   --pretrained_path ./checkpoints/timm/vit_base_patch16_224.augreg2_in21k_ft_in1k/model.safetensors \
   --clip_checkpoint_path ./checkpoints/clip/ViT-B-16.pt \

@@ -1,4 +1,4 @@
-"""DER++ with a linear-attention ensemble over multiple backbones."""
+"""DER++ with configurable multi-backbone fusion."""
 
 import copy
 import logging
@@ -24,20 +24,42 @@ def _parse_backbone_names(backbones: str, fallback: str) -> List[str]:
     return names
 
 
-class LinearAttentionBackbone(nn.Module):
-    """Fuse multiple classifier backbones with a learned linear attention gate."""
+def _parse_fusion_weights(weights: str, n_backbones: int) -> List[float]:
+    if weights is None or weights.strip() == '':
+        return [1.0 / n_backbones] * n_backbones
+    parsed_weights = [float(weight.strip()) for weight in weights.split(',') if weight.strip()]
+    if len(parsed_weights) != n_backbones:
+        raise ValueError(f'Expected {n_backbones} fusion weights, got {len(parsed_weights)} from `{weights}`.')
+    weight_sum = sum(parsed_weights)
+    if weight_sum <= 0:
+        raise ValueError('Manual fusion weights must have a positive sum.')
+    return [weight / weight_sum for weight in parsed_weights]
 
-    def __init__(self, backbones: Sequence[nn.Module], num_classes: int) -> None:
+
+class LinearAttentionBackbone(nn.Module):
+    """Fuse multiple classifier backbones with learned attention or manual weights."""
+
+    def __init__(self, backbones: Sequence[nn.Module], num_classes: int, fusion_mode: str = 'linear_attention', fusion_weights: str = None) -> None:
         super().__init__()
         if len(backbones) == 0:
             raise ValueError('LinearAttentionBackbone requires at least one backbone.')
+        if fusion_mode not in ['linear_attention', 'manual']:
+            raise ValueError(f'Unsupported fusion mode `{fusion_mode}`. Use `linear_attention` or `manual`.')
         self.backbones = nn.ModuleList(backbones)
-        self.attention = nn.Linear(num_classes, 1)
+        self.fusion_mode = fusion_mode
+        if self.fusion_mode == 'linear_attention':
+            self.attention = nn.Linear(num_classes, 1)
+        else:
+            weights = torch.tensor(_parse_fusion_weights(fusion_weights, len(backbones)), dtype=torch.float32)
+            self.register_buffer('manual_weights', weights.view(1, len(backbones), 1), persistent=True)
 
     def forward(self, x: torch.Tensor, returnt: str = 'out') -> torch.Tensor:
         outputs = torch.stack([backbone(x) for backbone in self.backbones], dim=1)
-        weights = torch.softmax(self.attention(outputs).squeeze(-1), dim=1)
-        fused = torch.sum(outputs * weights.unsqueeze(-1), dim=1)
+        if self.fusion_mode == 'linear_attention':
+            weights = torch.softmax(self.attention(outputs).squeeze(-1), dim=1).unsqueeze(-1)
+        else:
+            weights = self.manual_weights.to(device=outputs.device, dtype=outputs.dtype)
+        fused = torch.sum(outputs * weights, dim=1)
         if returnt in ('out', 'logits'):
             return fused
         if returnt in ('both', 'full', 'all'):
@@ -76,7 +98,11 @@ class DerppLinearAttention(ContinualModel):
         parser.add_argument('--beta', type=float, required=True,
                             help='Penalty weight for DER++ label replay.')
         parser.add_argument('--attention_backbones', type=str, default=None,
-                            help='Comma-separated backbone names to fuse with linear attention. Defaults to the selected --backbone.')
+                            help='Comma-separated backbone names to fuse. Defaults to the selected --backbone.')
+        parser.add_argument('--fusion_mode', type=str, default='linear_attention', choices=['linear_attention', 'manual'],
+                            help='Backbone fusion mode: learned linear attention or manually configured weights.')
+        parser.add_argument('--fusion_weights', type=str, default=None,
+                            help='Comma-separated backbone weights for --fusion_mode manual, e.g. `0.7,0.3`.')
         parser.add_argument('--clip_model_name', type=str, default='ViT-B-16',
                             help='CLIP architecture name used when `clip` is listed in --attention_backbones.')
         parser.add_argument('--clip_checkpoint_path', type=str, default=None,
@@ -100,7 +126,7 @@ class DerppLinearAttention(ContinualModel):
         if not used_primary:
             logging.warning('Primary --backbone `%s` is not listed in --attention_backbones and will not be used.', args.backbone)
 
-        fused_backbone = LinearAttentionBackbone(backbones, num_classes)
+        fused_backbone = LinearAttentionBackbone(backbones, num_classes, fusion_mode=args.fusion_mode, fusion_weights=args.fusion_weights)
         super().__init__(fused_backbone, loss, args, transform, dataset=dataset)
         self.buffer = Buffer(self.args.buffer_size)
 
