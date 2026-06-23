@@ -187,6 +187,38 @@ uv run python main.py \
   --num_workers 4
 ```
 
+To fuse the extracted ViT and CLIP features with a Progressive Layered Extraction (PLE) module instead of logits-level fusion, enable `--use_ple 1`. The PLE target count and expert/gate/tower hyperparameters are configurable from the command line:
+
+```bash
+uv run python main.py \
+  --model derpp-linear-attention \
+  --dataset domain-pneumonia \
+  --backbone vit \
+  --attention_backbones vit,clip \
+  --use_ple 1 \
+  --ple_num_tasks 2 \
+  --ple_num_levels 2 \
+  --ple_shared_expert_num 1 \
+  --ple_specific_expert_num 1 \
+  --ple_expert_dim 128 \
+  --ple_expert_hidden_units 256 \
+  --ple_gate_hidden_units 64 \
+  --ple_tower_hidden_units 64 \
+  --ple_output_mode mean \
+  --medical_domain_root ./dataset \
+  --pretrained_path ./checkpoints/timm/vit_base_patch16_224.augreg2_in21k_ft_in1k/model.safetensors \
+  --clip_checkpoint_path ./checkpoints/clip/ViT-B-16.pt \
+  --clip_model_name ViT-B-16 \
+  --lr 1e-4 \
+  --buffer_size 500 \
+  --minibatch_size 32 \
+  --batch_size 32 \
+  --n_epochs 10 \
+  --alpha 0.5 \
+  --beta 0.5 \
+  --num_workers 4
+```
+
 Run a quick smoke/debug training pass:
 
 ```bash
