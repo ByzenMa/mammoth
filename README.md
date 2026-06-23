@@ -187,15 +187,14 @@ uv run python main.py \
   --num_workers 4
 ```
 
-To fuse the extracted ViT and CLIP features with a Progressive Layered Extraction (PLE) module instead of logits-level fusion, enable `--use_ple 1`. The PLE target count and expert/gate/tower hyperparameters are configurable from the command line:
+To train the separate DER++ + Progressive Layered Extraction model, use `derpp-ple`. It fuses extracted ViT and CLIP features with a PLE module; the PLE target count and expert/gate/tower hyperparameters are configurable from the command line:
 
 ```bash
 uv run python main.py \
-  --model derpp-linear-attention \
+  --model derpp-ple \
   --dataset domain-pneumonia \
   --backbone vit \
-  --attention_backbones vit,clip \
-  --use_ple 1 \
+  --ple_backbones vit,clip \
   --ple_num_tasks 2 \
   --ple_num_levels 2 \
   --ple_shared_expert_num 1 \
@@ -330,7 +329,7 @@ Mammoth currently supports **more than 70** models, with new releases covering t
 - Continual Generative training for Incremental prompt-Learning (CGIL): `cgil`
 - Contrastive Language-Image Pre-Training (CLIP): `clip` (*static* method with no learning).
 - CSCCT (on DER++, X-DER with RPC, iCaRL, and ER-ACE): `derpp_cscct`, `xder_rpc_cscct`, `icarl_cscct`, `er_ace_cscct`.
-- Dark Experience for General Continual Learning: a Strong, Simple Baseline (DER & DER++): `der`, `derpp`, and `derpp-linear-attention`.
+- Dark Experience for General Continual Learning: a Strong, Simple Baseline (DER & DER++): `der`, `derpp`, `derpp-linear-attention`, and `derpp-ple`.
 - DualPrompt: Complementary Prompting for Rehearsal-free Continual Learning (DualPrompt) - _Requires_ `pip install timm==0.9.8`: `dualprompt`.
 - Efficient Lifelong Learning with A-GEM (A-GEM, A-GEM-R - A-GEM with reservoir buffer): `agem`, `agem_r`.
 - Experience Replay (ER): `er`.
