@@ -140,14 +140,52 @@ uv run python main.py \
   --savecheck task
 ```
 
-To fuse the default ViT backbone with a local CLIP visual backbone under a DER++ replay objective, use `derpp-linear-attention`:
+To run the final configurable DER++ ablation model, use `derpp-multiangent`. The two switches are independent:
+
+- `--use_multiangent 1 --use_multi_backbone 0`: DER++ + MultiAngent on the primary backbone only.
+- `--use_multiangent 0 --use_multi_backbone 1`: DER++ + multi-backbone logits fusion only.
+- `--use_multiangent 1 --use_multi_backbone 1`: DER++ + MultiAngent + multi-backbone feature fusion.
+
+For DER++ + MultiAngent with only the default ViT backbone:
 
 ```bash
 uv run python main.py \
-  --model derpp-linear-attention \
+  --model derpp-multiangent \
   --dataset domain-pneumonia \
   --backbone vit \
-  --attention_backbones vit,clip \
+  --use_multiangent 1 \
+  --use_multi_backbone 0 \
+  --multiangent_num_targets 2 \
+  --multiangent_num_levels 2 \
+  --multiangent_shared_expert_num 1 \
+  --multiangent_specific_expert_num 1 \
+  --multiangent_expert_dim 128 \
+  --multiangent_expert_hidden_units 256 \
+  --multiangent_gate_hidden_units 64 \
+  --multiangent_tower_hidden_units 64 \
+  --multiangent_output_mode mean \
+  --medical_domain_root ./dataset \
+  --pretrained_path ./checkpoints/timm/vit_base_patch16_224.augreg2_in21k_ft_in1k/model.safetensors \
+  --lr 1e-4 \
+  --buffer_size 500 \
+  --minibatch_size 32 \
+  --batch_size 32 \
+  --n_epochs 10 \
+  --alpha 0.5 \
+  --beta 0.5 \
+  --num_workers 4
+```
+
+For DER++ + multi-backbone logits fusion without MultiAngent, fuse the default ViT backbone with a local CLIP visual backbone:
+
+```bash
+uv run python main.py \
+  --model derpp-multiangent \
+  --dataset domain-pneumonia \
+  --backbone vit \
+  --use_multiangent 0 \
+  --use_multi_backbone 1 \
+  --multi_backbones vit,clip \
   --fusion_mode linear_attention \
   --medical_domain_root ./dataset \
   --pretrained_path ./checkpoints/timm/vit_base_patch16_224.augreg2_in21k_ft_in1k/model.safetensors \
@@ -163,14 +201,16 @@ uv run python main.py \
   --num_workers 4
 ```
 
-To bypass learned attention and manually weight each backbone, switch the fusion mode and provide one comma-separated weight per backbone:
+To bypass learned logits attention and manually weight each backbone, switch the fusion mode and provide one comma-separated weight per backbone:
 
 ```bash
 uv run python main.py \
-  --model derpp-linear-attention \
+  --model derpp-multiangent \
   --dataset domain-pneumonia \
   --backbone vit \
-  --attention_backbones vit,clip \
+  --use_multiangent 0 \
+  --use_multi_backbone 1 \
+  --multi_backbones vit,clip \
   --fusion_mode manual \
   --fusion_weights 0.7,0.3 \
   --medical_domain_root ./dataset \
@@ -187,23 +227,25 @@ uv run python main.py \
   --num_workers 4
 ```
 
-To train the separate DER++ + Progressive Layered Extraction model, use `derpp-ple`. It fuses extracted ViT and CLIP features with a PLE module; the PLE target count and expert/gate/tower hyperparameters are configurable from the command line:
+For DER++ + MultiAngent + multi-backbone feature fusion, enable both switches:
 
 ```bash
 uv run python main.py \
-  --model derpp-ple \
+  --model derpp-multiangent \
   --dataset domain-pneumonia \
   --backbone vit \
-  --ple_backbones vit,clip \
-  --ple_num_tasks 2 \
-  --ple_num_levels 2 \
-  --ple_shared_expert_num 1 \
-  --ple_specific_expert_num 1 \
-  --ple_expert_dim 128 \
-  --ple_expert_hidden_units 256 \
-  --ple_gate_hidden_units 64 \
-  --ple_tower_hidden_units 64 \
-  --ple_output_mode mean \
+  --use_multiangent 1 \
+  --use_multi_backbone 1 \
+  --multi_backbones vit,clip \
+  --multiangent_num_targets 2 \
+  --multiangent_num_levels 2 \
+  --multiangent_shared_expert_num 1 \
+  --multiangent_specific_expert_num 1 \
+  --multiangent_expert_dim 128 \
+  --multiangent_expert_hidden_units 256 \
+  --multiangent_gate_hidden_units 64 \
+  --multiangent_tower_hidden_units 64 \
+  --multiangent_output_mode mean \
   --medical_domain_root ./dataset \
   --pretrained_path ./checkpoints/timm/vit_base_patch16_224.augreg2_in21k_ft_in1k/model.safetensors \
   --clip_checkpoint_path ./checkpoints/clip/ViT-B-16.pt \
@@ -217,6 +259,7 @@ uv run python main.py \
   --beta 0.5 \
   --num_workers 4
 ```
+
 
 Run a quick smoke/debug training pass:
 
@@ -295,6 +338,7 @@ Useful options:
 - `--exclude <glob>` (can be repeated)
 - `--dry-run`
 
+
 ## 🆕 New Features
 
 - `--loadcheck` option now can load the arguments saved from the checkpoint, so you can resume the training from the last checkpoint by just running `python main.py --loadcheck <checkpoint_name>`.
@@ -329,7 +373,7 @@ Mammoth currently supports **more than 70** models, with new releases covering t
 - Continual Generative training for Incremental prompt-Learning (CGIL): `cgil`
 - Contrastive Language-Image Pre-Training (CLIP): `clip` (*static* method with no learning).
 - CSCCT (on DER++, X-DER with RPC, iCaRL, and ER-ACE): `derpp_cscct`, `xder_rpc_cscct`, `icarl_cscct`, `er_ace_cscct`.
-- Dark Experience for General Continual Learning: a Strong, Simple Baseline (DER & DER++): `der`, `derpp`, `derpp-linear-attention`, and `derpp-ple`.
+- Dark Experience for General Continual Learning: a Strong, Simple Baseline (DER & DER++): `der`, `derpp`, `derpp-linear-attention`, and `derpp-multiangent`.
 - DualPrompt: Complementary Prompting for Rehearsal-free Continual Learning (DualPrompt) - _Requires_ `pip install timm==0.9.8`: `dualprompt`.
 - Efficient Lifelong Learning with A-GEM (A-GEM, A-GEM-R - A-GEM with reservoir buffer): `agem`, `agem_r`.
 - Experience Replay (ER): `er`.
