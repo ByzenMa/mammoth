@@ -1,41 +1,15 @@
-"""DER++ with independently configurable multi-backbone and MultiAngent fusion."""
+"""DER++ with independently configurable MultiAngent and MINE-loss ablations."""
 
-import copy
-import logging
-from argparse import Namespace
+import math
 from typing import List, Sequence
 
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-from backbone import get_backbone_class
 from models.utils.continual_model import ContinualModel
 from utils.args import ArgumentParser, add_rehearsal_args
 from utils.buffer import Buffer
-
-
-def _normalize_backbone_name(name: str) -> str:
-    return name.strip().replace('_', '-').lower()
-
-
-def _parse_backbone_names(backbones: str, fallback: str) -> List[str]:
-    if backbones is None or backbones.strip() == '':
-        return [_normalize_backbone_name(fallback)]
-    names = [_normalize_backbone_name(name) for name in backbones.split(',') if name.strip()]
-    return names or [_normalize_backbone_name(fallback)]
-
-
-def _parse_fusion_weights(weights: str, n_backbones: int) -> List[float]:
-    if weights is None or weights.strip() == '':
-        return [1.0 / n_backbones] * n_backbones
-    parsed_weights = [float(weight.strip()) for weight in weights.split(',') if weight.strip()]
-    if len(parsed_weights) != n_backbones:
-        raise ValueError(f'Expected {n_backbones} fusion weights, got {len(parsed_weights)} from `{weights}`.')
-    weight_sum = sum(parsed_weights)
-    if weight_sum <= 0:
-        raise ValueError('Manual fusion weights must have a positive sum.')
-    return [weight / weight_sum for weight in parsed_weights]
 
 
 def _parse_hidden_units(hidden_units: str) -> List[int]:
@@ -77,37 +51,42 @@ def _make_gate(hidden_units: Sequence[int], dropout: float, activation: str, out
     return nn.Sequential(*layers)
 
 
-class LogitFusionBackbone(nn.Module):
-    """Fuse one or more classifier backbones at logits level."""
+class MINE(nn.Module):
+    """Mutual Information Neural Estimator used as an optional auxiliary loss."""
 
-    def __init__(self, backbones: Sequence[nn.Module], num_classes: int, fusion_mode: str = 'linear_attention', fusion_weights: str = None) -> None:
+    def __init__(self, hidden_size: int = 64) -> None:
         super().__init__()
-        if len(backbones) == 0:
-            raise ValueError('LogitFusionBackbone requires at least one backbone.')
-        if fusion_mode not in ['linear_attention', 'manual']:
-            raise ValueError(f'Unsupported fusion mode `{fusion_mode}`. Use `linear_attention` or `manual`.')
-        self.backbones = nn.ModuleList(backbones)
-        self.fusion_mode = fusion_mode
-        if self.fusion_mode == 'linear_attention':
-            self.attention = nn.Linear(num_classes, 1)
-        else:
-            weights = torch.tensor(_parse_fusion_weights(fusion_weights, len(backbones)), dtype=torch.float32)
-            self.register_buffer('manual_weights', weights.view(1, len(backbones), 1), persistent=True)
+        self.layers = nn.Sequential(nn.LazyLinear(hidden_size), nn.ReLU(), nn.Linear(hidden_size, 1))
 
-    def forward(self, x: torch.Tensor, returnt: str = 'out') -> torch.Tensor:
-        outputs = torch.stack([backbone(x) for backbone in self.backbones], dim=1)
-        if self.fusion_mode == 'linear_attention':
-            weights = torch.softmax(self.attention(outputs).squeeze(-1), dim=1).unsqueeze(-1)
-        else:
-            weights = self.manual_weights.to(device=outputs.device, dtype=outputs.dtype)
-        fused = torch.sum(outputs * weights, dim=1)
-        if returnt in ('out', 'logits'):
-            return fused
-        if returnt in ('both', 'full', 'all'):
-            return fused, outputs
-        if returnt == 'features':
-            return outputs.flatten(1)
-        raise ValueError(f'Unsupported returnt value for LogitFusionBackbone: {returnt}')
+    def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        y_marginal = torch.roll(y, shifts=1, dims=0)
+        joint_logits = self.layers(torch.cat([x, y], dim=1))
+        marginal_logits = self.layers(torch.cat([x, y_marginal], dim=1))
+        log_mean_exp = torch.logsumexp(marginal_logits, dim=0) - math.log(marginal_logits.size(0))
+        return -math.log2(math.e) * (torch.mean(joint_logits) - log_mean_exp.squeeze(0))
+
+
+class MINELossModule(nn.Module):
+    """Computes pairwise MINE loss over projected chunks of one backbone feature vector."""
+
+    def __init__(self, num_views: int, projection_dim: int, hidden_size: int) -> None:
+        super().__init__()
+        if num_views < 2:
+            raise ValueError('--mine_num_views must be at least 2.')
+        self.num_views = num_views
+        self.projections = nn.ModuleList([nn.LazyLinear(projection_dim) for _ in range(num_views)])
+        self.estimators = nn.ModuleList([MINE(hidden_size) for _ in range(num_views * (num_views - 1) // 2)])
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        chunks = torch.chunk(features.flatten(1), self.num_views, dim=1)
+        views = [projection(chunk) for projection, chunk in zip(self.projections, chunks)]
+        losses = []
+        estimator_idx = 0
+        for left_idx in range(self.num_views):
+            for right_idx in range(left_idx + 1, self.num_views):
+                losses.append(self.estimators[estimator_idx](views[left_idx], views[right_idx]))
+                estimator_idx += 1
+        return torch.stack(losses).mean()
 
 
 class MultiAngentBlock(nn.Module):
@@ -136,30 +115,24 @@ class MultiAngentBlock(nn.Module):
         return torch.sum(expert_stack * gate.unsqueeze(-1), dim=1)
 
     def forward(self, inputs: Sequence[torch.Tensor]) -> List[torch.Tensor]:
-        specific_outputs = [
-            [expert(inputs[target_idx]) for expert in self.specific_experts[target_idx]]
-            for target_idx in range(self.num_targets)
-        ]
+        specific_outputs = [[expert(inputs[target_idx]) for expert in self.specific_experts[target_idx]] for target_idx in range(self.num_targets)]
         shared_outputs = [expert(inputs[-1]) for expert in self.shared_experts]
-        outputs = []
-        for target_idx in range(self.num_targets):
-            outputs.append(self._gate_experts(specific_outputs[target_idx] + shared_outputs, self.target_gates[target_idx](inputs[target_idx])))
+        outputs = [self._gate_experts(specific_outputs[target_idx] + shared_outputs, self.target_gates[target_idx](inputs[target_idx])) for target_idx in range(self.num_targets)]
         if not self.is_last:
             shared_experts = [expert for target_experts in specific_outputs for expert in target_experts] + shared_outputs
             outputs.append(self._gate_experts(shared_experts, self.shared_gate(inputs[-1])))
         return outputs
 
 
-class MultiAngentBackbone(nn.Module):
-    """Fuse backbone features with MultiAngent expert/gate layers and emit logits."""
+class DerppMultiAngentNet(nn.Module):
+    """Single-backbone classifier with optional MultiAngent head and optional MINE loss."""
 
-    def __init__(self, backbones: Sequence[nn.Module], num_classes: int, num_targets: int, num_levels: int,
-                 shared_expert_num: int, specific_expert_num: int, expert_dim: int,
-                 expert_hidden_units: str, gate_hidden_units: str, tower_hidden_units: str,
-                 dropout: float, activation: str, output_mode: str, output_index: int) -> None:
+    def __init__(self, backbone: nn.Module, num_classes: int, use_multiangent: bool,
+                 num_targets: int, num_levels: int, shared_expert_num: int, specific_expert_num: int, expert_dim: int,
+                 expert_hidden_units: str, gate_hidden_units: str, tower_hidden_units: str, dropout: float,
+                 activation: str, output_mode: str, output_index: int, use_mine_loss: bool,
+                 mine_num_views: int, mine_projection_dim: int, mine_hidden_size: int) -> None:
         super().__init__()
-        if len(backbones) == 0:
-            raise ValueError('MultiAngentBackbone requires at least one backbone.')
         if num_targets < 1:
             raise ValueError('--multiangent_num_targets must be at least 1.')
         if num_levels < 1:
@@ -168,59 +141,59 @@ class MultiAngentBackbone(nn.Module):
             raise ValueError('--multiangent_output_mode must be `mean` or `target`.')
         if output_mode == 'target' and not 0 <= output_index < num_targets:
             raise ValueError(f'--multiangent_output_index must be in [0, {num_targets - 1}] for {num_targets} targets.')
-        self.backbones = nn.ModuleList(backbones)
-        self.num_targets = num_targets
+        self.backbone = backbone
+        self.use_multiangent = use_multiangent
         self.output_mode = output_mode
         self.output_index = output_index
-        expert_hidden = _parse_hidden_units(expert_hidden_units)
-        gate_hidden = _parse_hidden_units(gate_hidden_units)
-        tower_hidden = _parse_hidden_units(tower_hidden_units)
-        self.blocks = nn.ModuleList([
-            MultiAngentBlock(num_targets, shared_expert_num, specific_expert_num, expert_hidden, gate_hidden,
-                             expert_dim, dropout, activation, is_last=level_idx == num_levels - 1)
-            for level_idx in range(num_levels)
-        ])
-        self.towers = nn.ModuleList([_make_mlp(tower_hidden, dropout, activation, expert_dim) for _ in range(num_targets)])
-        self.heads = nn.ModuleList([nn.LazyLinear(num_classes) for _ in range(num_targets)])
+        self.last_mine_loss = None
+        self.mine = MINELossModule(mine_num_views, mine_projection_dim, mine_hidden_size) if use_mine_loss else None
+        if use_multiangent:
+            expert_hidden = _parse_hidden_units(expert_hidden_units)
+            gate_hidden = _parse_hidden_units(gate_hidden_units)
+            tower_hidden = _parse_hidden_units(tower_hidden_units)
+            self.blocks = nn.ModuleList([
+                MultiAngentBlock(num_targets, shared_expert_num, specific_expert_num, expert_hidden, gate_hidden,
+                                 expert_dim, dropout, activation, is_last=level_idx == num_levels - 1)
+                for level_idx in range(num_levels)
+            ])
+            self.towers = nn.ModuleList([_make_mlp(tower_hidden, dropout, activation, expert_dim) for _ in range(num_targets)])
+            self.heads = nn.ModuleList([nn.LazyLinear(num_classes) for _ in range(num_targets)])
 
     def _extract_features(self, x: torch.Tensor) -> torch.Tensor:
-        features = [backbone(x, returnt='features') for backbone in self.backbones]
-        return torch.cat([feature.flatten(1) for feature in features], dim=1)
+        return self.backbone(x, returnt='features').flatten(1)
 
     def forward(self, x: torch.Tensor, returnt: str = 'out') -> torch.Tensor:
+        if not self.use_multiangent and self.mine is None:
+            return self.backbone(x, returnt=returnt)
         features = self._extract_features(x)
-        inputs: List[torch.Tensor] = [features] * (self.num_targets + 1)
-        for block in self.blocks:
-            inputs = block(inputs)
-        tower_features = [tower(inputs[target_idx]) for target_idx, tower in enumerate(self.towers)]
-        target_logits = torch.stack([head(tower_features[target_idx]) for target_idx, head in enumerate(self.heads)], dim=1)
-        logits = target_logits.mean(dim=1) if self.output_mode == 'mean' else target_logits[:, self.output_index]
+        self.last_mine_loss = self.mine(features) if self.mine is not None else None
+        if not self.use_multiangent:
+            logits = self.backbone(x)
+            aux_features = features
+        else:
+            inputs: List[torch.Tensor] = [features] * (len(self.towers) + 1)
+            for block in self.blocks:
+                inputs = block(inputs)
+            tower_features = [tower(inputs[target_idx]) for target_idx, tower in enumerate(self.towers)]
+            target_logits = torch.stack([head(tower_features[target_idx]) for target_idx, head in enumerate(self.heads)], dim=1)
+            logits = target_logits.mean(dim=1) if self.output_mode == 'mean' else target_logits[:, self.output_index]
+            aux_features = torch.cat(tower_features, dim=1)
         if returnt in ('out', 'logits'):
             return logits
         if returnt in ('both', 'full', 'all'):
-            return logits, target_logits
+            return logits, aux_features
         if returnt == 'features':
-            return torch.cat(tower_features, dim=1)
-        raise ValueError(f'Unsupported returnt value for MultiAngentBackbone: {returnt}')
+            return aux_features
+        raise ValueError(f'Unsupported returnt value for DerppMultiAngentNet: {returnt}')
 
-
-def _build_registered_backbone(name: str, args: Namespace, num_classes: int) -> nn.Module:
-    backbone_class, backbone_args = get_backbone_class(name, return_args=True)
-    parsed_args = {}
-    for arg_name, arg_conf in backbone_args.items():
-        if arg_name == 'num_classes':
-            parsed_args[arg_name] = num_classes
-        elif hasattr(args, arg_name):
-            parsed_args[arg_name] = getattr(args, arg_name)
-        elif arg_conf.get('required', False):
-            raise ValueError(f'Missing required argument `{arg_name}` for auxiliary backbone `{name}`.')
-        else:
-            parsed_args[arg_name] = arg_conf.get('default')
-    return backbone_class(**parsed_args)
+    def get_mine_loss(self) -> torch.Tensor:
+        if self.last_mine_loss is None:
+            raise RuntimeError('MINE loss requested before a forward pass with --use_mine_loss 1.')
+        return self.last_mine_loss
 
 
 class DerppMultiAngent(ContinualModel):
-    """DER++ with independent MultiAngent and multi-backbone ablation switches."""
+    """DER++ with independent MultiAngent and MINE-loss ablation switches."""
 
     NAME = 'derpp-multiangent'
     COMPATIBILITY = ['class-il', 'domain-il', 'task-il', 'general-continual']
@@ -230,16 +203,12 @@ class DerppMultiAngent(ContinualModel):
         add_rehearsal_args(parser)
         parser.add_argument('--alpha', type=float, required=True, help='Penalty weight for DER++ logit replay.')
         parser.add_argument('--beta', type=float, required=True, help='Penalty weight for DER++ label replay.')
-        parser.add_argument('--use_multi_backbone', type=int, default=0,
-                            help='Use all --multi_backbones when set to 1. If 0, only the primary --backbone is used.')
-        parser.add_argument('--multi_backbones', type=str, default=None,
-                            help='Comma-separated backbone names for multi-backbone ablations, e.g. `vit,clip`.')
-        parser.add_argument('--use_multiangent', type=int, default=0,
-                            help='Use MultiAngent feature-level expert fusion when set to 1. If 0, use DER++ logits or logits fusion.')
-        parser.add_argument('--fusion_mode', type=str, default='linear_attention', choices=['linear_attention', 'manual'],
-                            help='Logits-level multi-backbone fusion used when --use_multiangent 0 and --use_multi_backbone 1.')
-        parser.add_argument('--fusion_weights', type=str, default=None,
-                            help='Comma-separated backbone weights for --fusion_mode manual, e.g. `0.7,0.3`.')
+        parser.add_argument('--use_multiangent', type=int, default=0, help='Use MultiAngent feature-level expert head when set to 1.')
+        parser.add_argument('--use_mine_loss', type=int, default=0, help='Add the MINE auxiliary loss when set to 1.')
+        parser.add_argument('--mine_loss_weight', type=float, default=0.1, help='Weight of the optional MINE auxiliary loss.')
+        parser.add_argument('--mine_num_views', type=int, default=2, help='Number of feature chunks used to compute pairwise MINE loss.')
+        parser.add_argument('--mine_projection_dim', type=int, default=128, help='Projection dimension for each MINE feature view.')
+        parser.add_argument('--mine_hidden_size', type=int, default=64, help='Hidden size of each MINE estimator.')
         parser.add_argument('--multiangent_num_targets', type=int, default=2, help='Number of MultiAngent target branches.')
         parser.add_argument('--multiangent_num_levels', type=int, default=2, help='Number of stacked MultiAngent extraction levels.')
         parser.add_argument('--multiangent_shared_expert_num', type=int, default=1, help='Number of shared experts in each MultiAngent level.')
@@ -252,57 +221,42 @@ class DerppMultiAngent(ContinualModel):
         parser.add_argument('--multiangent_activation', type=str, default='relu', choices=['relu', 'gelu', 'tanh'], help='Activation used inside MultiAngent modules.')
         parser.add_argument('--multiangent_output_mode', type=str, default='mean', choices=['mean', 'target'], help='Average target logits or select one target branch.')
         parser.add_argument('--multiangent_output_index', type=int, default=0, help='Target branch index used when --multiangent_output_mode target.')
-        parser.add_argument('--clip_model_name', type=str, default='ViT-B-16', help='CLIP architecture name used when `clip` is listed in --multi_backbones.')
-        parser.add_argument('--clip_checkpoint_path', type=str, default=None, help='Local CLIP checkpoint path used when `clip` is listed in --multi_backbones.')
-        parser.add_argument('--freeze_clip', type=int, default=0, help='Freeze the CLIP visual encoder when `clip` is listed in --multi_backbones.')
         return parser
 
     def __init__(self, backbone, loss, args, transform, dataset=None):
         num_classes = dataset.N_CLASSES if dataset is not None else args.n_classes
-        backbones = self._build_backbones(backbone, args, num_classes)
-        if int(args.use_multiangent):
-            net = MultiAngentBackbone(
-                backbones, num_classes, args.multiangent_num_targets, args.multiangent_num_levels,
-                args.multiangent_shared_expert_num, args.multiangent_specific_expert_num, args.multiangent_expert_dim,
-                args.multiangent_expert_hidden_units, args.multiangent_gate_hidden_units, args.multiangent_tower_hidden_units,
-                args.multiangent_dropout, args.multiangent_activation, args.multiangent_output_mode, args.multiangent_output_index)
-        elif len(backbones) > 1:
-            net = LogitFusionBackbone(backbones, num_classes, fusion_mode=args.fusion_mode, fusion_weights=args.fusion_weights)
-        else:
-            net = backbones[0]
+        net = DerppMultiAngentNet(
+            backbone, num_classes, bool(args.use_multiangent), args.multiangent_num_targets, args.multiangent_num_levels,
+            args.multiangent_shared_expert_num, args.multiangent_specific_expert_num, args.multiangent_expert_dim,
+            args.multiangent_expert_hidden_units, args.multiangent_gate_hidden_units, args.multiangent_tower_hidden_units,
+            args.multiangent_dropout, args.multiangent_activation, args.multiangent_output_mode, args.multiangent_output_index,
+            bool(args.use_mine_loss), args.mine_num_views, args.mine_projection_dim, args.mine_hidden_size)
         super().__init__(net, loss, args, transform, dataset=dataset)
         self.buffer = Buffer(self.args.buffer_size)
 
-    def _build_backbones(self, backbone, args, num_classes: int) -> List[nn.Module]:
-        primary_name = _normalize_backbone_name(args.backbone)
-        names = _parse_backbone_names(args.multi_backbones, args.backbone) if int(args.use_multi_backbone) else [primary_name]
-        backbones = []
-        used_primary = False
-        for name in names:
-            if name == primary_name and not used_primary:
-                backbones.append(backbone)
-                used_primary = True
-            else:
-                logging.info('Building auxiliary backbone `%s` for %s.', name, self.NAME)
-                backbones.append(_build_registered_backbone(name, copy.copy(args), num_classes))
-        if not used_primary:
-            logging.warning('Primary --backbone `%s` is not listed in --multi_backbones and will not be used.', args.backbone)
-        return backbones
+    def _mine_loss(self) -> torch.Tensor:
+        return self.net.get_mine_loss() if int(self.args.use_mine_loss) else 0
 
     def observe(self, inputs, labels, not_aug_inputs, epoch=None):
         self.opt.zero_grad()
 
         outputs = self.net(inputs)
         loss = self.loss(outputs, labels)
+        if int(self.args.use_mine_loss):
+            loss += self.args.mine_loss_weight * self._mine_loss()
 
         if not self.buffer.is_empty():
             buf_inputs, _, buf_logits = self.buffer.get_data(self.args.minibatch_size, transform=self.transform, device=self.device)
             buf_outputs = self.net(buf_inputs)
             loss += self.args.alpha * F.mse_loss(buf_outputs, buf_logits)
+            if int(self.args.use_mine_loss):
+                loss += self.args.mine_loss_weight * self._mine_loss()
 
             buf_inputs, buf_labels, _ = self.buffer.get_data(self.args.minibatch_size, transform=self.transform, device=self.device)
             buf_outputs = self.net(buf_inputs)
             loss += self.args.beta * self.loss(buf_outputs, buf_labels)
+            if int(self.args.use_mine_loss):
+                loss += self.args.mine_loss_weight * self._mine_loss()
 
         loss.backward()
         self.opt.step()

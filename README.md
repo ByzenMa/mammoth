@@ -140,13 +140,13 @@ uv run python main.py \
   --savecheck task
 ```
 
-To run the final configurable DER++ ablation model, use `derpp-multiangent`. The two switches are independent:
+To run the final configurable DER++ ablation model, use `derpp-multiangent`. The two switches are independent and both operate on the primary configured backbone:
 
-- `--use_multiangent 1 --use_multi_backbone 0`: DER++ + MultiAngent on the primary backbone only.
-- `--use_multiangent 0 --use_multi_backbone 1`: DER++ + multi-backbone logits fusion only.
-- `--use_multiangent 1 --use_multi_backbone 1`: DER++ + MultiAngent + multi-backbone feature fusion.
+- `--use_multiangent 1 --use_mine_loss 0`: DER++ + MultiAngent feature expert head.
+- `--use_multiangent 0 --use_mine_loss 1`: DER++ + MINE auxiliary loss.
+- `--use_multiangent 1 --use_mine_loss 1`: DER++ + MultiAngent + MINE.
 
-For DER++ + MultiAngent with only the default ViT backbone:
+For DER++ + MultiAngent with the default ViT backbone:
 
 ```bash
 uv run python main.py \
@@ -154,7 +154,7 @@ uv run python main.py \
   --dataset domain-pneumonia \
   --backbone vit \
   --use_multiangent 1 \
-  --use_multi_backbone 0 \
+  --use_mine_loss 0 \
   --multiangent_num_targets 2 \
   --multiangent_num_levels 2 \
   --multiangent_shared_expert_num 1 \
@@ -176,7 +176,7 @@ uv run python main.py \
   --num_workers 4
 ```
 
-For DER++ + multi-backbone logits fusion without MultiAngent, fuse the default ViT backbone with a local CLIP visual backbone:
+For DER++ + MINE loss without MultiAngent:
 
 ```bash
 uv run python main.py \
@@ -184,13 +184,13 @@ uv run python main.py \
   --dataset domain-pneumonia \
   --backbone vit \
   --use_multiangent 0 \
-  --use_multi_backbone 1 \
-  --multi_backbones vit,clip \
-  --fusion_mode linear_attention \
+  --use_mine_loss 1 \
+  --mine_loss_weight 0.1 \
+  --mine_num_views 2 \
+  --mine_projection_dim 128 \
+  --mine_hidden_size 64 \
   --medical_domain_root ./dataset \
   --pretrained_path ./checkpoints/timm/vit_base_patch16_224.augreg2_in21k_ft_in1k/model.safetensors \
-  --clip_checkpoint_path ./checkpoints/clip/ViT-B-16.pt \
-  --clip_model_name ViT-B-16 \
   --lr 1e-4 \
   --buffer_size 500 \
   --minibatch_size 32 \
@@ -201,33 +201,7 @@ uv run python main.py \
   --num_workers 4
 ```
 
-To bypass learned logits attention and manually weight each backbone, switch the fusion mode and provide one comma-separated weight per backbone:
-
-```bash
-uv run python main.py \
-  --model derpp-multiangent \
-  --dataset domain-pneumonia \
-  --backbone vit \
-  --use_multiangent 0 \
-  --use_multi_backbone 1 \
-  --multi_backbones vit,clip \
-  --fusion_mode manual \
-  --fusion_weights 0.7,0.3 \
-  --medical_domain_root ./dataset \
-  --pretrained_path ./checkpoints/timm/vit_base_patch16_224.augreg2_in21k_ft_in1k/model.safetensors \
-  --clip_checkpoint_path ./checkpoints/clip/ViT-B-16.pt \
-  --clip_model_name ViT-B-16 \
-  --lr 1e-4 \
-  --buffer_size 500 \
-  --minibatch_size 32 \
-  --batch_size 32 \
-  --n_epochs 10 \
-  --alpha 0.5 \
-  --beta 0.5 \
-  --num_workers 4
-```
-
-For DER++ + MultiAngent + multi-backbone feature fusion, enable both switches:
+For DER++ + MultiAngent + MINE, enable both switches:
 
 ```bash
 uv run python main.py \
@@ -235,8 +209,11 @@ uv run python main.py \
   --dataset domain-pneumonia \
   --backbone vit \
   --use_multiangent 1 \
-  --use_multi_backbone 1 \
-  --multi_backbones vit,clip \
+  --use_mine_loss 1 \
+  --mine_loss_weight 0.1 \
+  --mine_num_views 2 \
+  --mine_projection_dim 128 \
+  --mine_hidden_size 64 \
   --multiangent_num_targets 2 \
   --multiangent_num_levels 2 \
   --multiangent_shared_expert_num 1 \
@@ -248,8 +225,6 @@ uv run python main.py \
   --multiangent_output_mode mean \
   --medical_domain_root ./dataset \
   --pretrained_path ./checkpoints/timm/vit_base_patch16_224.augreg2_in21k_ft_in1k/model.safetensors \
-  --clip_checkpoint_path ./checkpoints/clip/ViT-B-16.pt \
-  --clip_model_name ViT-B-16 \
   --lr 1e-4 \
   --buffer_size 500 \
   --minibatch_size 32 \
