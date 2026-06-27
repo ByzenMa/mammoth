@@ -146,6 +146,8 @@ To run the final configurable DER++ ablation model, use `derpp-multiangent`. The
 - `--use_multiangent 0 --use_mine_loss 1`: DER++ + MINE auxiliary loss.
 - `--use_multiangent 1 --use_mine_loss 1`: DER++ + MultiAngent + MINE.
 
+`--mine_loss_weight` must be non-negative; the MINE term is optimized with a non-negative softplus surrogate so the auxiliary term cannot drive the total training loss below zero.
+
 For DER++ + MultiAngent with the default ViT backbone:
 
 ```bash

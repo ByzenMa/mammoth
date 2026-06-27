@@ -63,7 +63,8 @@ class MINE(nn.Module):
         joint_logits = self.layers(torch.cat([x, y], dim=1))
         marginal_logits = self.layers(torch.cat([x, y_marginal], dim=1))
         log_mean_exp = torch.logsumexp(marginal_logits, dim=0) - math.log(marginal_logits.size(0))
-        return -math.log2(math.e) * (torch.mean(joint_logits) - log_mean_exp.squeeze(0))
+        mi_estimate = math.log2(math.e) * (torch.mean(joint_logits) - log_mean_exp.squeeze(0))
+        return F.softplus(-mi_estimate)
 
 
 class MINELossModule(nn.Module):
@@ -224,6 +225,8 @@ class DerppMultiAngent(ContinualModel):
         return parser
 
     def __init__(self, backbone, loss, args, transform, dataset=None):
+        if args.mine_loss_weight < 0:
+            raise ValueError('--mine_loss_weight must be non-negative so the total loss cannot be reduced by the auxiliary MINE term.')
         num_classes = dataset.N_CLASSES if dataset is not None else args.n_classes
         net = DerppMultiAngentNet(
             backbone, num_classes, bool(args.use_multiangent), args.multiangent_num_targets, args.multiangent_num_levels,
